@@ -1,1 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PharmaOrder - Bon de Commande</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .hidden-view { display: none; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen font-sans text-gray-800">
+
+    <!-- Navbar -->
+    <nav class="bg-blue-600 text-white p-4 shadow-md flex justify-between items-center hidden" id="navbar">
+        <h1 class="text-xl font-bold">PharmaOrder</h1>
+        <div class="flex items-center gap-4">
+            <span id="user-display" class="font-medium"></span>
+            <button onclick="logout()" class="bg-blue-800 px-3 py-1 rounded hover:bg-blue-700">Logout</button>
+        </div>
+    </nav>
+
+    <!-- Login View -->
+    <div id="login-view" class="flex items-center justify-center min-h-screen">
+        <div class="bg-white p-8 rounded-lg shadow-lg w-96">
+            <h2 class="text-2xl font-bold mb-6 text-center text-blue-600">Pharma Login</h2>
+            <input type="text" id="username" placeholder="Username" class="w-full mb-4 p-2 border rounded">
+            <input type="password" id="password" placeholder="Password" class="w-full mb-4 p-2 border rounded">
+            <button onclick="login()" class="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700 transition">Sign In</button>
+            <p id="login-error" class="text-red-500 text-sm mt-2 text-center"></p>
+        </div>
+    </div>
+
+    <!-- Pharmacy Dashboard (Create Order) -->
+    <div id="pharmacy-view" class="hidden-view p-6 max-w-4xl mx-auto">
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold">Create Bon de Commande</h2>
+            <button onclick="showPharmacyHistory()" class="text-blue-600 underline">View History</button>
+        </div>
+        
+        <div class="bg-white p-6 rounded-lg shadow">
+            <div id="order-rows" class="space-y-4">
+                <!-- Rows injected by JS -->
+            </div>
+            <button onclick="addOrderRow()" class="mt-4 bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300">+ Add Medication</button>
+            
+            <div class="mt-8 border-t pt-4">
+                <button onclick="submitOrder()" class="w-full bg-green-600 text-white py-3 rounded text-lg font-bold hover:bg-green-700">Submit Order</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Principal Dashboard (Review Orders) -->
+    <div id="principal-view" class="hidden-view p-6 max-w-6xl mx-auto">
+        <h2 class="text-2xl font-bold mb-6">Incoming Orders</h2>
+        <div class="bg-white rounded-lg shadow overflow-hidden">
+            <table class="w-full text-left">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="p-4">Order ID</th>
+                        <th class="p-4">Pharmacy</th>
+                        <th class="p-4">Date</th>
+                        <th class="p-4">Status</th>
+                        <th class="p-4">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="orders-list">
+                    <!-- Orders injected here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Order Detail Modal (Principal) -->
+    <div id="order-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl p-6 relative max-h-[90vh] overflow-y-auto">
+            <button onclick="closeModal()" class="absolute top-4 right-4 text-gray-500 hover:text-red-500 font-bold text-xl">&times;</button>
+            <h3 class="text-xl font-bold mb-4">Validate Order #<span id="modal-order-id"></span></h3>
+            
+            <table class="w-full mb-6 border-collapse">
+                <thead>
+                    <tr class="bg-gray-100 border-b">
+                        <th class="p-2 text-left">Medication</th>
+                        <th class="p-2 text-center">Requested Qty</th>
+                        <th class="p-2 text-center w-32">Approved Qty</th>
+                    </tr>
+                </thead>
+                <tbody id="modal-items">
+                    <!-- Items injected here -->
+                </tbody>
+            </table>
+
+            <div class="flex justify-end gap-3">
+                <button onclick="closeModal()" class="px-4 py-2 bg-gray-200 rounded">Cancel</button>
+                <button onclick="validateOrder()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Validate & Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // *** CONFIGURATION ***
+        const API_URL = "YOUR_WORKER_URL"; // REPLACE THIS!
+
+        let currentUser = null;
+        let medications = [];
+        let currentEditingOrderId = null;
+
+        // --- Auth & Navigation ---
+        async function login() {
+            const u = document.getElementById('username').value;
+            const p = document.getElementById('password').value;
+            
+            try {
+                const res = await fetch(`${API_URL}/api/login`, {
+                    method: 'POST',
+                    body: JSON.stringify({ username: u, password: p })
+                });
+                
+                if (!res.ok) throw new Error("Login failed");
+                
+                currentUser = await res.json();
+                document.getElementById('login-view').classList.add('hidden-view');
+                document.getElementById('navbar').classList.remove('hidden');
+                document.getElementById('user-display').innerText = `${currentUser.name} (${currentUser.role})`;
+
+                if (currentUser.role === 'pharmacy') {
+                    loadMedications();
+                    document.getElementById('pharmacy-view').classList.remove('hidden-view');
+                    addOrderRow(); // Add first row
+                } else {
+                    loadPrincipalDashboard();
+                    document.getElementById('principal-view').classList.remove('hidden-view');
+                }
+            } catch (e) {
+                document.getElementById('login-error').innerText = "Invalid credentials";
+            }
+        }
+
+        function logout() {
+            location.reload();
+        }
+
+        // --- Pharmacy Logic ---
+        async function loadMedications() {
+            const res = await fetch(`${API_URL}/api/medications`);
+            medications = await res.json();
+        }
+
+        function addOrderRow() {
+            const container = document.getElementById('order-rows');
+            const row = document.createElement('div');
+            row.className = "flex gap-4 items-end order-row";
+            
+            let options = `<option value="">Select Medication...</option>`;
+            medications.forEach(m => options += `<option value="${m.id}">${m.name}</option>`);
+
+            row.innerHTML = `
+                <div class="flex-1">
+                    <label class="block text-sm font-medium text-gray-700">Medication</label>
+                    <select class="med-select w-full mt-1 p-2 border rounded bg-white">${options}</select>
+                </div>
+                <div class="w-32">
+                    <label class="block text-sm font-medium text-gray-700">Quantity</label>
+                    <input type="number" min="1" class="med-qty w-full mt-1 p-2 border rounded" placeholder="Qty">
+                </div>
+                <button onclick="this.parentElement.remove()" class="bg-red-100 text-red-600 p-2 rounded hover:bg-red-200 mb-0.5">&times;</button>
+            `;
+            container.appendChild(row);
+        }
+
+        async function submitOrder() {
+            const rows = document.querySelectorAll('.order-row');
+            const items = [];
+            
+            rows.forEach(row => {
+                const medId = row.querySelector('.med-select').value;
+                const medName = row.querySelector('.med-select').selectedOptions[0].text;
+                const qty = row.querySelector('.med-qty').value;
+                
+                if (medId && qty > 0) {
+                    items.push({ medId, name: medName, qty: parseInt(qty) });
+                }
+            });
+
+            if (items.length === 0) return alert("Please add at least one medication.");
+
+            const res = await fetch(`${API_URL}/api/orders`, {
+                method: 'POST',
+                body: JSON.stringify({ userId: currentUser.id, items })
+            });
+
+            if (res.ok) {
+                alert("Order submitted successfully!");
+                document.getElementById('order-rows').innerHTML = '';
+                addOrderRow();
+            }
+        }
+
+        // --- Principal Logic ---
+        async function loadPrincipalDashboard() {
+            const res = await fetch(`${API_URL}/api/orders?role=principal`);
+            const orders = await res.json();
+            const tbody = document.getElementById('orders-list');
+            tbody.innerHTML = '';
+
+            orders.forEach(o => {
+                const statusColor = o.status === 'approved' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800';
+                const actionBtn = o.status === 'pending' 
+                    ? `<button onclick="openOrder(${o.id})" class="text-blue-600 hover:underline font-medium">Review</button>` 
+                    : `<button onclick="openOrder(${o.id})" class="text-gray-500 hover:underline">View</button>`;
+
+                tbody.innerHTML += `
+                    <tr class="border-b hover:bg-gray-50">
+                        <td class="p-4 font-mono text-sm">#${o.id}</td>
+                        <td class="p-4">${o.pharmacy_name}</td>
+                        <td class="p-4 text-sm text-gray-500">${new Date(o.created_at).toLocaleString()}</td>
+                        <td class="p-4"><span class="px-2 py-1 rounded text-xs uppercase font-bold ${statusColor}">${o.status}</span></td>
+                        <td class="p-4">${actionBtn}</td>
+                    </tr>
+                `;
+            });
+        }
+
+        async function openOrder(orderId) {
+            currentEditingOrderId = orderId;
+            const res = await fetch(`${API_URL}/api/orders/${orderId}`);
+            const items = await res.json();
+            
+            document.getElementById('modal-order-id').innerText = orderId;
+            const tbody = document.getElementById('modal-items');
+            tbody.innerHTML = '';
+
+            items.forEach(item => {
+                tbody.innerHTML += `
+                    <tr class="border-b" data-id="${item.id}">
+                        <td class="p-3">${item.medication_name}</td>
+                        <td class="p-3 text-center font-bold text-gray-600">${item.requested_qty}</td>
+                        <td class="p-3 text-center">
+                            <input type="number" min="0" value="${item.approved_qty}" class="approved-input w-20 p-1 border border-blue-300 rounded text-center font-bold text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        </td>
+                    </tr>
+                `;
+            });
+
+            document.getElementById('order-modal').classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('order-modal').classList.add('hidden');
+        }
+
+        async function validateOrder() {
+            const inputs = document.querySelectorAll('.approved-input');
+            const updates = [];
+
+            inputs.forEach(input => {
+                const row = input.closest('tr');
+                const id = row.getAttribute('data-id');
+                const val = parseInt(input.value);
+                // Ensure value is at least 0 (setting to 0 removes it effectively from the shipment)
+                updates.push({ id: id, approved_qty: val >= 0 ? val : 0 });
+            });
+
+            const res = await fetch(`${API_URL}/api/orders/${currentEditingOrderId}`, {
+                method: 'PUT',
+                body: JSON.stringify({ items: updates })
+            });
+
+            if (res.ok) {
+                closeModal();
+                loadPrincipalDashboard(); // Refresh list
+            }
+        }
+    </script>
+</body>
+</html>
+
+
 
